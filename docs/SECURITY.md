@@ -12,7 +12,7 @@ Threat goals include prompt injection/data disclosure, arbitrary code execution,
 
 ## 2. Local prototype security
 
-Stage 1 is fixture-only: server-owned fixture manifest, deterministic fake provider and simulated runner. No user-supplied path is opened, no target dependency installed, no target test code executed, no LLM/GitHub credential and no external API. Fixture IDs map through a fixed manifest to files under a canonical fixture root; reject traversal, symlinks/reparse points, special files, unknown entries and out-of-root resolution. Use race-resistant no-follow/handle-relative file opening rooted at the trusted directory; canonicalize-and-check followed by an ordinary open is insufficient against replacement races. User input is never used as a path.
+Stage 1 is fixture-only: server-owned fixture manifest, deterministic fake provider and simulated runner. The application must not contact external services at runtime. Developer setup may download BugPilot's own dependencies from an approved package source using a reviewed lockfile; this does not permit target repository dependency downloads. No target test code is executed, no target pytest suite is run, no external LLM API or GitHub is contacted, and no such credentials are needed. No user-supplied path is opened. Fixture IDs map through a fixed manifest to files under a canonical fixture root; reject traversal, symlinks/reparse points, special files, unknown entries and out-of-root resolution. Use race-resistant no-follow/handle-relative file opening rooted at the trusted directory; canonicalize-and-check followed by an ordinary open is insufficient against replacement races. User input is never used as a path.
 
 Bind API and UI to `127.0.0.1` and `::1` only. Browser calls go through a same-origin Next.js proxy. The proxy strips inbound forwarding headers and targets only configured API loopback authority; API trusts no `X-Forwarded-*` and checks its configured backend `Host`. On mutations, require exact configured non-null `Origin`, `Sec-Fetch-Site: same-origin`, and `X-CSRF-Token`. A same-origin `GET /api/v1/csrf` returns a random per-process token; browser holds it in memory and sends the header; API compares in constant time. Do not enable permissive CORS. Test the actual proxied flow, missing/null/hostile Origin, forged forwarding headers, CSRF failures, DNS-rebinding-style Host mismatch and non-loopback bind attempts. Browser controls are not full authentication; the prototype is for a trusted local developer only.
 
@@ -72,11 +72,13 @@ Artifacts are private, bounded, access-checked and retention-controlled. Validat
 
 ## 7. Stage validation
 
-1. Local prototype: fixture containment, loopback/Host/Origin/CSRF tests, local data protection and no target execution.
-2. Read-only analysis: path/symlink/secret exclusion and bounded-context tests.
-3. Provider: data policy, prompt-injection, schema, budget and refusal/timeout tests.
-4. Execution: every launch-gate evidence item reviewed independently; otherwise remain disabled.
-5. Hosted pilot: identity, privacy, quotas, retention/deletion, backup/restore and incident exercises.
-6. GitHub write: permission, approval/hash/base, webhook and race/idempotency tests.
+1. **Stage 1, local end-to-end vertical slice:** fixture containment, loopback/Host/Origin/CSRF tests, local data protection, queue admission, and no external-service contact or target execution.
+2. **Stage 2, read-only Python repository context:** path/symlink/secret exclusion and bounded-context tests.
+3. **Stage 3, provider-backed proposal mode:** data policy, prompt-injection, schema, budget and refusal/timeout tests.
+4. **Stage 4, isolated pytest execution pilot:** every launch-gate evidence item reviewed independently; otherwise remain disabled.
+5. **Stage 5, hosted single-tenant pilot:** identity, privacy, quotas, retention/deletion, backup/restore and incident exercises.
+6. **Stage 6, GitHub App and explicit PR flow:** permission, approval/hash/base, webhook and race/idempotency tests.
+7. **Stage 7, multi-tenant SaaS:** tenant isolation, quotas, retention/deletion and recovery controls.
+8. **Stage 8, expansion:** security/conformance review for each new capability.
 
 No security control is currently verified. Document implementation evidence and residual risks before enabling each stage.

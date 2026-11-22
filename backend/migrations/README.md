@@ -1,0 +1,1 @@
+Alembic is not adopted for the Stage 1 SQLite prototype. The repository owns the local schema initialization; add versioned migrations only when an approved migration strategy is selected.

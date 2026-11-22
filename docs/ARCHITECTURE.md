@@ -1,6 +1,6 @@
 # BugPilot AI — Architecture Proposal
 
-**Status:** Revised proposal; implementation requires explicit approval
+**Status:** Stage 1 implementation contract revised; implementation requires explicit approval of the updated documentation
 
 **Date:** 2026-11-05
 
@@ -8,25 +8,29 @@
 
 ## 1. Product and staged scope
 
+Stage numbering and names follow `ROADMAP.md` (canonical Stages 0–8). **Stage 0 — approval and contract freeze** must be completed before implementation; this revised Stage 1 contract still awaits explicit approval.
+
 BugPilot turns a developer's bug report into a reviewable, evidence-backed investigation: inspect relevant Python source, formulate hypotheses, propose a reproduction test, execute in isolation, inspect results, propose a patch, and verify it. A human owns decisions to publish changes.
 
-### Stage A — local prototype
+### Stage 1 — local end-to-end vertical slice
 
 Validate the end-to-end investigation experience at low cost. A single developer runs the web UI and API locally, chooses a curated fixture repository, submits a report, follows a deterministic investigation, and reviews hypotheses, evidence, test/patch proposals and verification states.
 
 - Use local fixture repositories, deterministic fake LLM/provider output and a fake execution adapter initially.
 - Include a minimal Next.js UI in the first backend vertical slice.
 - Use a local SQLite database and owner-private filesystem artifacts; no hosted Postgres, Redis, object storage, multi-tenant workspaces or billing.
-- No GitHub App, issue import, login system, PR creation, live provider, or execution of arbitrary repository code in this stage.
+- No external services are contacted at runtime. No GitHub App, issue import, login system, PR creation, live provider, target dependency download, target repository code execution, or target pytest run is permitted in this stage.
 - Fake-provider output must be labeled fixture/fake output; simulated runner results must be labeled simulated. Neither is actual model generation or test execution.
 
-### Later stages
+### Later stages (canonical numbering from `ROADMAP.md`)
 
-- **Stage B — read-only Python analysis:** inspect explicitly provided safe snapshots; bounded AST/symbol/traceback context, without executing repository code.
-- **Stage C — isolated pytest pilot:** actual baseline/reproduction and patch tests only through a separately disposable execution boundary after independent security review and evidence of every gate in `SECURITY.md`.
-- **Stage D — hosted single-tenant pilot:** selected identity, approved provider/data policy, durable hosted state/queue/artifacts, and controlled repositories; GitHub read access only if required.
-- **Stage E — multi-tenant SaaS:** workspaces, robust identity/roles, tenant isolation, quotas, retention/deletion, operations and support.
-- **Stage F — GitHub writes and product expansion:** explicit PR approval, billing and additional language adapters at separate milestones.
+- **Stage 2 — read-only Python repository context:** inspect explicitly provided safe snapshots; bounded AST/symbol/traceback context, without executing repository code.
+- **Stage 3 — provider-backed proposal mode:** selected provider and approved data policy; external provider calls are a later-stage capability, not part of Stage 1.
+- **Stage 4 — isolated pytest execution pilot:** actual baseline/reproduction and patch tests only through a separately disposable execution boundary after independent security review and evidence of every gate in `SECURITY.md`.
+- **Stage 5 — hosted single-tenant pilot:** selected identity, approved provider/data policy, durable hosted state/queue/artifacts, and controlled repositories; GitHub read access only if required.
+- **Stage 6 — GitHub App and explicit PR flow:** explicit PR approval and least-privilege GitHub integration.
+- **Stage 7 — multi-tenant SaaS:** workspaces, robust identity/roles, tenant isolation, quotas, retention/deletion, operations and support.
+- **Stage 8 — expansion:** billing, additional language adapters, and other separately approved product capabilities.
 
 Out of the local prototype: GitHub App/webhooks/issues; auth/workspaces/billing; hosted services; real provider calls; arbitrary target dependency install or code execution; PR/branch writes; automatic merge; embeddings; microservices; Kubernetes; WebSockets.
 
@@ -69,12 +73,13 @@ Keep HTTP DTOs, domain types and persistence models distinct where useful. Domai
 ### First-slice local flow
 
 1. User chooses a curated fixture ID and submits a report through the UI.
-2. API validates input, creates a local investigation and initial event transactionally, and responds `202` after it is durably `queued`.
-3. A bounded in-process coordinator queue runs the fake workflow; this is intentionally not a durable hosted job queue.
-4. Workflow records fixture source context and fake-provider hypotheses/test/patch proposals with `content_type=generated`, `producer_kind=fake_provider`, producer version and source fixture ID.
-5. Simulated runner records `producer_kind=simulated_runner`, `execution_status=simulated`; `verification_outcome=not_run`.
-6. UI polls persisted API state and displays fixture/fake output, simulated execution and the fact that no test ran.
-7. On process restart, any nonterminal queued/running investigation is marked `interrupted` with an event; it is not silently resumed.
+2. API validates input and reserves bounded in-process coordinator capacity before committing a new investigation. If no capacity is available, it returns `503` with `coordinator_capacity_exhausted`; it creates no investigation and consumes no idempotency key. Existing same-key/same-request replays return the existing investigation, and changed requests retain the existing `409` conflict behavior.
+3. While holding the reservation, the API atomically commits the new investigation, idempotency record, and initial event, then enqueues the work using the reserved capacity. Release the reservation if the transaction does not create a new investigation. Return `202` only after the commit and enqueue have succeeded.
+4. A bounded in-process coordinator queue runs the fake workflow; this is intentionally not a durable hosted job queue. If the process crashes after commit but before enqueue, startup recovery marks the unfinished investigation `interrupted` and appends its event; it is not resumed.
+5. Workflow records fixture source context and fake-provider hypotheses/test/patch proposals with `content_type=generated`, `producer_kind=fake_provider`, producer version and source fixture ID.
+6. Simulated runner records `producer_kind=simulated_runner`, `execution_status=simulated`; `verification_outcome=not_run`.
+7. UI polls persisted API state and displays fixture/fake output, simulated execution and the fact that no test ran.
+8. On process restart, any nonterminal queued/running investigation is marked `interrupted` with an event; it is not silently resumed.
 
 The local UI and API use a same-origin Next.js proxy/rewrite to FastAPI. Both bind only to `127.0.0.1` and `::1`. Configure exact UI origin and API loopback host/port at startup. The proxy strips client-supplied forwarding headers; the API does not trust `X-Forwarded-*`, accepts only its configured Host, requires exact non-null `Origin` plus `Sec-Fetch-Site: same-origin` on mutations, and exposes a same-origin CSRF-token endpoint. The browser keeps the token in memory and sends it in `X-CSRF-Token`; the API compares it in constant time. Do not enable permissive CORS. Test the actual proxied request path.
 
@@ -92,7 +97,7 @@ Stage 1 status enum: `queued`, `analyzing`, `reviewable`, `failed`, `cancelled`,
 - `failed`, `cancelled`, and `interrupted` are terminal for a particular investigation. Stage 1 has no retry endpoint; the user starts a new investigation with a new idempotency key.
 - Allowed Stage 1 transitions: `queued -> analyzing|cancelled|interrupted`; `analyzing -> reviewable|failed|cancelled|interrupted`. Invalid transitions return `409`.
 - Coordinator requests a transition through the `investigations` use case; that module owns status, monotonically increasing per-investigation event sequence, and atomic state+event transaction.
-- `POST` returns `202` only after initial record/event are committed in `queued`. Background coordinator may finish before the client polls; `GET` always returns authoritative current state. On startup, recover nonterminal rows to `interrupted` and append events.
+- `POST` reserves coordinator capacity before committing a new investigation. If capacity is unavailable, return `503` `{code:"coordinator_capacity_exhausted",message,request_id}` without creating an investigation or consuming the idempotency key. With capacity reserved, atomically commit the investigation, idempotency record and initial event, then enqueue work; return `202` only after enqueue. On startup, recover every nonterminal row, including a committed-but-not-enqueued row, to `interrupted` and append events. Background coordinator may finish before the client polls; `GET` always returns authoritative current state.
 - Cancellation is available in Stage 1. First cancel of nonterminal work returns `202` and transitions to `cancelled`; repeat cancel on already-cancelled work returns current state idempotently; other terminal states return `409`.
 - State transitions use compare-and-set/optimistic versioning in one transaction. If cancellation commits first, it sets a durable cancellation flag; the coordinator checks it before each stage and before writing results, and cannot append workflow output or advance state afterward. If completion commits first, cancellation returns `409` with current terminal state. A late worker result is discarded and logged as a bounded internal cancellation race, not appended as investigation evidence.
 - Idempotency key reservation, normalized request hash and investigation creation are atomic under a unique key constraint. Concurrent same-key/same-body requests resolve to one investigation and return its ID; same key/different body returns `409`.
@@ -113,15 +118,15 @@ All local endpoints use `/api/v1`. The browser reaches them through the same-ori
 |---|---|---|
 | `GET` | `/api/v1/csrf` | `{token}` per local app process; fetched through same-origin proxy only; token is required for mutations |
 | `GET` | `/api/v1/fixtures` | `{items:[{id,title,language,revision}]}` for curated manifest entries only |
-| `POST` | `/api/v1/investigations` | Body `{fixture_id,report}` (UTF-8 report limit 16 KiB, total JSON body limit 32 KiB); requires `Idempotency-Key` and `X-CSRF-Token`; commit then return `202` `{id,status:"queued",verification_outcome:"not_run",execution_status:"not_requested",provider_mode:"fake"}` |
-| `GET` | `/api/v1/investigations/{id}` | `{id,status,verification_outcome,execution_status,fixture:{id,title,revision},created_at,updated_at,latest_event_sequence,evidence:[EvidenceItem]}`; no Stage 1 run entity |
+| `POST` | `/api/v1/investigations` | Body `{fixture_id,report}` (UTF-8 report limit 16 KiB, total JSON body limit 32 KiB); requires `Idempotency-Key` and `X-CSRF-Token`; reserve capacity, atomically commit investigation/idempotency record/initial event, enqueue, then return `202` `{id,status:"queued",verification_outcome:"not_run",execution_status:"not_requested",provider_mode:"fake"}`. Capacity exhaustion returns `503` with `coordinator_capacity_exhausted` and no investigation or consumed key. |
+| `GET` | `/api/v1/investigations/{id}` | `{id,status,report,verification_outcome,execution_status,fixture:{id,title,revision},created_at,updated_at,latest_event_sequence,evidence:[EvidenceItem]}`; `report` is the original submitted report; no Stage 1 run entity |
 | `GET` | `/api/v1/investigations/{id}/events?after={sequence}` | `{items:[{sequence,type,created_at,data}...],next_cursor}` with exclusive cursor semantics |
 | `POST` | `/api/v1/investigations/{id}/cancel` | Requires CSRF token. If cancellation wins CAS: `202` and `cancelled`; repeated cancel returns current cancelled record; if other terminal transition wins, `409` with current status |
 | `GET` | `/api/v1/health` | Minimal local liveness; no environment details |
 
 `EvidenceItem` is `{id,kind,content_type,producer_kind,producer_version,source_fixture_id?,title,summary,source_ref?}`; `source_ref` contains only repository-relative `path`, `line_start`, `line_end`, `revision`, and `content_hash`. `execution_status` and `verification_outcome` are separate enums. Stage 1 `execution_status` may be `not_requested` or `simulated`; `verification_outcome` is always `not_run`. `simulated` is never a verification outcome. In later stages, `execution_status` describes an attempt (`queued`, `running`, `completed`, `setup_failure`, `timeout`, `cancelled`, `lost`); verification outcome describes policy classification.
 
-The idempotency key is scoped to the local app and reserved atomically with investigation creation under a unique constraint. Same key + same normalized request returns the original investigation; same key + different request returns `409`. Use a stable JSON error body `{code,message,request_id}`; safe codes include `invalid_request`, `unknown_fixture`, `not_found`, `invalid_state`, `idempotency_conflict`, and `internal_error`. Do not expose stack traces, filesystem paths, secrets or report contents in errors.
+The idempotency key is scoped to the local app and reserved atomically with investigation creation under a unique constraint. Same key + same normalized request returns the original investigation; same key + different request returns `409`. Capacity is reserved only for a new investigation; a failed capacity admission does not write an idempotency record. Use a stable JSON error body `{code,message,request_id}`; safe codes include `invalid_request`, `unknown_fixture`, `not_found`, `invalid_state`, `idempotency_conflict`, `coordinator_capacity_exhausted`, and `internal_error`. Do not expose stack traces, filesystem paths, secrets or report contents in errors.
 
 No GitHub, login, workspace, provider, approval, PR or real execution endpoint is exposed in Stage 1.
 
@@ -163,9 +168,9 @@ Hosted SaaS can add users, workspaces, memberships, installations, repositories,
 
 ## 6. Dependency, pytest and execution policy
 
-### Prototype
+### Stage 1 prototype
 
-BugPilot's own dependencies are installed by a developer from a reviewed pinned lockfile. No target-project dependency installation or target pytest execution occurs. Fixtures use controlled dependencies only. Fake provider and simulated runner are the defaults.
+Developer setup may download BugPilot's own dependencies from an approved package source using a reviewed pinned lockfile. This setup-time exception does not permit external-service contact at Stage 1 runtime. Stage 1 must not download target repository dependencies, call external LLM APIs, contact GitHub, execute target repository code, or run target pytest suites. Fixtures use controlled dependencies only. Fake provider and simulated runner are the defaults.
 
 ### Future execution pilot
 

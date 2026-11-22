@@ -15,7 +15,7 @@
 | AI | Deterministic fake provider and fixture responses | One selected replaceable LLM provider after data-policy review |
 | Repository | Curated fixture IDs only | GitHub/source adapter after authorization stage |
 | Execution | Simulated adapter only; arbitrary project execution disabled | Separate hardened disposable runner |
-| Dependencies | Developer installs BugPilot dependencies from reviewed lock | Trusted curated runtime and hash/provenance-checked wheels; no target repo installs |
+| Dependencies | Developer setup may download BugPilot dependencies from an approved package source using a reviewed lockfile; no target repository dependencies | Trusted curated runtime and hash/provenance-checked wheels; no target repo installs |
 | Identity/integration | Single local developer; no login/GitHub | Explicit identity and GitHub App policies, introduced by stage |
 | Operations | Local logs and tests | Secret manager, monitoring, retention, quotas and incident response |
 
@@ -23,9 +23,9 @@ The prototype intentionally needs no Postgres, Redis, hosted artifact storage, a
 
 ## Dependency and pytest policy
 
-Developers install **BugPilot's own** dependencies from a reviewed pinned lockfile. This does not authorize installing dependencies from target repositories.
+Developer setup may download **BugPilot's own** dependencies from an approved package source using a reviewed pinned lockfile. This setup-time allowance does not authorize external-service contact at Stage 1 runtime or installing dependencies from target repositories.
 
-Stage 1 does not install target dependencies or execute target pytest. Later execution supports only reviewed Python dependency profiles pinned by version and hash. Prefer approved binary wheels from trusted sources with provenance review, vulnerability review, SBOM/attestation where available, and update/revocation ownership. A hash proves artifact identity, not that its code is benign. Build approved wheelhouses in a separate disposable unprivileged builder, with no production credentials and restricted network. Reject source distributions by default; any exceptional source build is treated as hostile and requires isolated build/review before promotion.
+Stage 1 runtime must not contact external services. It does not download target dependencies, call external LLM APIs, contact GitHub, execute target repository code, or run target pytest suites. Later Stage 3 may add provider-backed proposals under an approved data policy; Stage 4 may add execution only after its security gates. Later execution supports only reviewed Python dependency profiles pinned by version and hash. Prefer approved binary wheels from trusted sources with provenance review, vulnerability review, SBOM/attestation where available, and update/revocation ownership. A hash proves artifact identity, not that its code is benign. Build approved wheelhouses in a separate disposable unprivileged builder, with no production credentials and restricted network. Reject source distributions by default; any exceptional source build is treated as hostile and requires isolated build/review before promotion.
 
 Runner has deny-by-default network access and uses immutable prebuilt runtime/wheelhouse; it never runs `pip install` against repository requirements or package indexes. Missing dependencies are `setup_failure`. `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; runner-owned pytest config and fixed args; reject repository plugin options and permit only literal statically verifiable `pytest_plugins` declarations for approved plugins. Reject dynamic/indirect/uninspectable registrations. Do not trust repository config as command authority. `conftest.py`, tests and package code remain hostile executable code inside the isolated boundary.
 

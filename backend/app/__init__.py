@@ -1,0 +1,1 @@
+"""BugPilot Stage 1 backend application."""
